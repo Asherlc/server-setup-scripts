@@ -1,0 +1,51 @@
+upstream <app_name>_upstream {
+  server unix:/data/<app-name>/current/tmp/sockets/unicorn.sock fail_timeout=0;
+}
+
+server {
+  listen 80;
+ 
+  server_name <primary_domain> <domain_aliases>;
+ 
+  root /data/<app-name>/current/public;
+ 
+  access_log /var/log/nginx/<primary_domain>/<primary_domain>.access.log combined;
+  error_log /var/log/nginx/<primary_domain>/<primary_domain>.error.log notice;
+  # error_log /dev/null notice;
+ 
+  include /etc/nginx/common/servers.conf;
+
+  location ~ ^/(assets)/  {
+    root /data/<app-name>/shared/;
+    gzip_static on; # to serve pre-gzipped version
+    expires max;
+    add_header Cache-Control public;
+  }
+ 
+  location / {
+ 
+    # auth is disabled for this server
+    #auth_basic            "Restricted";
+    #auth_basic_user_file  /etc/nginx/passwd/<app-name>.users;
+ 
+    # only try to serve a static file if the request method is GET or HEAD
+    # if it's anything else (POST for example) hit mongrel.
+    if ($request_method !~ "GET|HEAD") {
+      proxy_pass http://<app_name>_upstream;
+      break;
+    }
+ 
+    include /etc/nginx/common/proxy.conf;
+ 
+    if (!-f $request_filename) {
+      proxy_pass http://<app_name>_upstream;
+      break;
+    }
+ 
+  }
+ 
+  location = /500.html {
+    root /data/<app-name>/current/public;
+  }
+ 
+}
