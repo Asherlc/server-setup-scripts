@@ -2,15 +2,19 @@
 
 log_operation() {
   local function_name
+
   function_name="$1"
-  echo $($function_name | sed 's/_/ /g')
+
+  echo "Starting $($function_name | sed 's/_/ /g')"
 }
 
 log_operation_finished() {
   local function_name
   local readable_function_name
+
   function_name="$1"
   readable_function_name=$(echo $function_name | sed 's/_/ /g')
+
   echo "\033[32m$readable_function_name finished\033[0m\n"
 }
 
@@ -40,7 +44,7 @@ install_packages() {
   apt-get -y update
   apt-get -y upgrade
   apt-get -y dist-upgrade
-  apt-get -y install sudo git-core curl zlib1g-dev build-essential libssl-dev libreadline-dev libyaml-dev libsqlite3-dev sqlite3 libxml2-dev libxslt1-dev postgresql postgresql-contrib nginx libpq-dev
+  apt-get -y install sudo git-core curl zlib1g-dev build-essential libssl-dev libreadline-dev libyaml-dev libsqlite3-dev sqlite3 libxml2-dev libxslt1-dev postgresql postgresql-contrib nginx libpq-dev rbenv
 
   log_operation_finished "$FUNCNAME"
 }
@@ -48,8 +52,7 @@ install_packages() {
 create_deploy_user() {
   log_operation "$FUNCNAME"
 
-  user_password=$(date +%s | sha256sum | base64 | head -c 8)
-  useradd deploy -p $user_password
+  adduser --disabled-password --gecos "" deploy
 
   log_operation_finished "$FUNCNAME"
 }
@@ -60,23 +63,21 @@ create_directories() {
 
   mkdir -p "/var/www/$app_name"
   chown deploy "/var/www/$app_name"
-  mkdir -p /home/deploy
 
   log_operation_finished "$FUNCNAME"
 }
 
 install_ruby() {
+  local ruby_version
+
   log_operation "$FUNCNAME"
 
-  git clone https://github.com/sstephenson/rbenv.git /home/deploy/.rbenv
-  git clone https://github.com/sstephenson/ruby-build.git /home/deploy/.rbenv/plugins/ruby-build
-  echo 'export PATH="$HOME/.rbenv/bin:$PATH"' >> /home/deploy/.bashrc
-  echo 'eval "$(rbenv init -)"' >> /home/deploy/.bashrc
-  echo "Installing requested Ruby version. This might take a while.\n"
-  /home/deploy/.rbenv/bin/rbenv install $ruby_version
-  /home/deploy/.rbenv/bin/rbenv global $ruby_version
-  /home/deploy/.rbenv/bin/rbenv rehash
-  /home/deploy/.rbenv/shims/gem install bundler
+  read -p "Enter the app's needed Ruby version: " ruby_version
+
+  rbenv install $ruby_version
+  rbenv global $ruby_version
+  rbenv rehash
+  gem install bundler
 
   log_operation_finished "$FUNCNAME"
 }
@@ -88,7 +89,7 @@ configure_nginx() {
   underscored_app_name=$(echo "$app_name"  | sed 's/-/_/g')
   read -p "Enter the primary domain name (ex: myapp.com): " primary_domain
   nginx_config_file_path="/etc/nginx/sites-available/$primary_domain"
-  cp "${PWD}/templates/nginx_config" $nginx_config_file_path
+  cp "/usr/local/server-setup-scripts/templates/nginx_site_config" $nginx_config_file_path
   read -p "Enter the alias domains (ex: myapp.org myapp.net myapp.mobi): " domain_aliases
   sed -i "s/<app-name>/$app_name/g" $nginx_config_file_path
   sed -i "s/<app_name>/$underscored_app_name/g" $nginx_config_file_path
@@ -103,8 +104,11 @@ configure_nginx() {
 configure_postgres() {
   log_operation "$FUNCNAME"
 
-  /usr/local/pgsql/bin/createuser deploy
-  /usr/local/pgsql/bin/createdb $app_name -O deploy
+  get_app_name
+
+  sudo -u postgres createuser --superuser $USER
+  createuser deploy
+  createdb -O deploy $app_name
 
   log_operation_finished "$FUNCNAME"
 }
@@ -137,17 +141,17 @@ while getopts "i:" opt; do
       echo "Invalid option: -$OPTARG" >&2
       exit 1
       ;;
-    :)
-      install_packages
-      create_deploy_user
-      create_directories
-      install_ruby
-      confgure_nginx
-      configure_postgres
-      configure_ssh_keys
-      ;;
   esac
 done
 
+if [ -z $(getopts "i:" opt) ]; then
+  install_packages
+  create_deploy_user
+  create_directories
+  install_ruby
+  configure_nginx
+  configure_postgres
+  configure_ssh_keys
+fi
 
 chown -R deploy /home/deploy
