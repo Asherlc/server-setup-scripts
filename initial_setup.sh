@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+function as_user() {
+  su -l -c "$1" deploy
+}
+
 log_operation() {
   local function_name
 
@@ -44,7 +48,7 @@ install_packages() {
   apt-get -y update
   apt-get -y upgrade
   apt-get -y dist-upgrade
-  apt-get -y install sudo git-core curl zlib1g-dev build-essential libssl-dev libreadline-dev libyaml-dev libsqlite3-dev sqlite3 libxml2-dev libxslt1-dev postgresql postgresql-contrib nginx libpq-dev rbenv
+  apt-get -y install sudo git-core curl zlib1g-dev build-essential libssl-dev libreadline-dev libyaml-dev libsqlite3-dev sqlite3 libxml2-dev libxslt1-dev postgresql postgresql-contrib nginx libpq-dev ImageMagick libmagickwand-dev graphicsmagick-libmagick-dev-compat libmagickcore-dev memcached default-jre openjdk-6-jdk solr-tomcat monit
 
   log_operation_finished "$FUNCNAME"
 }
@@ -53,6 +57,10 @@ create_deploy_user() {
   log_operation "$FUNCNAME"
 
   adduser --disabled-password --gecos "" deploy
+
+  # Grant sudo access to nginx services
+  touch /etc/sudoers.d/deploy
+  echo "deploy ALL=NOPASSWD: /usr/sbin/service nginx start,/usr/sbin/service nginx stop,/usr/sbin/service nginx restart" > /etc/sudoers.d/deploy
 
   log_operation_finished "$FUNCNAME"
 }
@@ -72,12 +80,26 @@ install_ruby() {
 
   log_operation "$FUNCNAME"
 
+  # TODO: Figure out how to install rbenv on a per user basis
   read -p "Enter the app's needed Ruby version: " ruby_version
 
-  rbenv install $ruby_version
-  rbenv global $ruby_version
-  rbenv rehash
-  gem install bundler
+  # Installing rbenv
+  as_user "git clone git://github.com/sstephenson/rbenv.git ~/.rbenv"
+  as_user "echo 'export PATH=\"\$HOME/.rbenv/bin:\$PATH\"' >> ~/.profile"
+  as_user "echo 'eval \"\$(rbenv init -)\"' >> ~/.profile"
+  as_user "git clone git://github.com/sstephenson/ruby-build.git ~/.rbenv/plugins/ruby-build"
+  log "Installing Ruby ${ruby_version}"
+  as_user "rbenv install ${ruby_version} && rbenv rehash && rbenv global ${ruby_version}"
+  as_user "echo 'gem: --no-document' > ~/.gemrc && gem i bundler"
+
+  # Install rbenv for root user
+  git clone git://github.com/sstephenson/rbenv.git ~/.rbenv
+  echo 'export PATH=\"\$HOME/.rbenv/bin:\$PATH\"' >> ~/.profile
+  echo 'eval \"\$(rbenv init -)\"' >> ~/.profile
+  git clone git://github.com/sstephenson/ruby-build.git ~/.rbenv/plugins/ruby-build
+  log "Installing Ruby ${ruby_version}"
+  rbenv install ${ruby_version} && rbenv rehash && rbenv global ${ruby_version}
+  echo 'gem: --no-document' > ~/.gemrc && gem i bundler
 
   log_operation_finished "$FUNCNAME"
 }
@@ -98,6 +120,8 @@ configure_nginx() {
   sudo ln -s $nginx_config_file_path "/etc/nginx/sites-enabled/$primary_domain"
   mkdir -p "/var/log/nginx/$primary_domain"
 
+  service nginx start
+
   log_operation_finished "$FUNCNAME"
 }
 
@@ -116,9 +140,14 @@ configure_postgres() {
 configure_ssh_keys() {
   log_operation "$FUNCNAME"
 
+
   echo "Supply the keygen generator with a blank password: "
   mkdir -p /home/deploy/.ssh
   ssh-keygen -f /home/deploy/.ssh/id_rsa -t rsa -N ''
+  #TODO: make this run as the deploy user
+  exec ssh-agent bash
+  ssh-add ~/.ssh/id_rsa
+  # end deploy user stuff
   echo "\033[33m Paste the following into the GitHub or GitLab deploy keys section:\033[0m\n"
   cat /home/deploy/.ssh/id_rsa.pub
   read -p "Press enter when you've copied the key over and are ready to continue." continue_confirmation
